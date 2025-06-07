@@ -6,50 +6,68 @@
  */
 
 plugins {
-  // Apply the org.jetbrains.kotlin.jvm Plugin to add support for Kotlin.
-  alias(libs.plugins.kotlin.jvm)
+    // Apply the org.jetbrains.kotlin.jvm Plugin to add support for Kotlin.
+    alias(libs.plugins.kotlin.jvm)
 
-  // Apply the application plugin to add support for building a CLI application in Java.
-  application
+    // Apply the application plugin to add support for building a CLI application in Java.
+    application
 }
 
 repositories {
-  // Use Maven Central for resolving dependencies.
-  mavenCentral()
+    // Use Maven Central for resolving dependencies.
+    mavenCentral()
 }
 
+val exposedVersion = "0.61.0"
+
 dependencies {
-  // Use the Kotlin JUnit 5 integration.
-  testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
+    // Use the Kotlin JUnit 5 integration.
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
 
-  // Use the JUnit 5 integration.
-  testImplementation(libs.junit.jupiter.engine)
+    // Use the JUnit 5 integration.
+    testImplementation(libs.junit.jupiter.engine)
 
-  testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 
-  // This dependency is used by the application.
-  implementation(libs.guava)
+    // This dependency is used by the application.
+    implementation(libs.guava)
 
-  implementation("org.jetbrains.exposed:exposed-core:0.45.0")
-  implementation("org.jetbrains.exposed:exposed-dao:0.45.0")
-  implementation("org.jetbrains.exposed:exposed-jdbc:0.45.0")
-  implementation("org.postgresql:postgresql:42.7.3")
-  implementation("org.jetbrains.kotlinx:kotlinx-cli:0.3.6")
+    implementation("org.jetbrains.exposed:exposed-core:$exposedVersion")
+    implementation("org.jetbrains.exposed:exposed-crypt:$exposedVersion")
+    implementation("org.jetbrains.exposed:exposed-dao:$exposedVersion")
+    implementation("org.jetbrains.exposed:exposed-jdbc:$exposedVersion")
+    implementation("org.jetbrains.exposed:exposed-kotlin-datetime:$exposedVersion")
+
+    implementation("org.jetbrains.exposed:exposed-json:$exposedVersion")
+    implementation("org.jetbrains.exposed:exposed-money:$exposedVersion")
+    implementation("org.jetbrains.exposed:exposed-spring-boot-starter:$exposedVersion")
+
+    implementation("org.postgresql:postgresql:42.7.3")
+    implementation("com.h2database:h2:2.2.224") // postgresに必要
+
+    implementation("org.jetbrains.kotlinx:kotlinx-cli:0.3.6")
 }
 
 // Apply a specific Java toolchain to ease working on different environments.
 java {
-  toolchain {
-    languageVersion = JavaLanguageVersion.of(21)
-  }
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
 }
 
 application {
-  // Define the main class for the application.
-  mainClass = "org.example.AppKt"
+    // Define the main class for the application.
+    mainClass = "org.example.AppKt"
 }
 
 tasks.named<Test>("test") {
-  // Use JUnit Platform for unit tests.
-  useJUnitPlatform()
+    // Use JUnit Platform for unit tests.
+    useJUnitPlatform()
+}
+
+tasks.register<JavaExec>("dbInit") {
+    group = "database"
+    description = "手動でDB初期化を実行"
+    mainClass.set("org.example.db.DbInitKt")
+    classpath = sourceSets.main.get().runtimeClasspath
 }

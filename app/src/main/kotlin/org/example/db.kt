@@ -1,49 +1,71 @@
-// import org.jetbrains.exposed.dao.id.IntIdTable
-// import org.jetbrains.exposed.sql.javatime.date
-//
-// // 給料の受け取り方法 Enum（例）
-// enum class PayMethod { CASH, BANK_TRANSFER }
-//
-// // 従業員テーブル
-// object Employees : IntIdTable() {
-//     val hourlyWage = integer("hourlyWage")
-//     val monthlySalary = integer("monthlySalary")
-//     val bonus = integer("bonus")
-//     val payMethod = enumerationByName("payMethod", 20, PayMethod::class)
-//     val isMember = bool("isMember")
-//     val groupFee = integer("groupFee")
-// }
-//
-// // 勤務時間テーブル（1従業員に複数日分）
-// object EmployeeWorkHours : IntIdTable() {
-//     val employee = reference("employeeId", Employees)
-//     val day = date("day")
-//     val hoursWorked = integer("hoursWorked")
-// }
-//
-// // 売上レポート用テーブル
-// object EmployeeSalesReports : IntIdTable() {
-//     val employee = reference("employeeId", Employees)
-//     val reportData = text("reportData")
-//     // 必要に応じてSalesReportの内容を適切に分割
-// }
-//
-// // 給料支払日
-// object EmployeePayDates : IntIdTable() {
-//     val employee = reference("employeeId", Employees)
-//     val payDate = date("payDate")
-// }
-//
-// fun init() {
-//     Database.connect("jdbc:h2:mem:test;DB_CLOSE_DELAY=-1;", driver = "org.h2.Driver")
-//
-//     transaction {
-//         // テーブル作成（まとめて複数可）
-//         SchemaUtils.create(
-//             Employees,
-//             EmployeeWorkHours,
-//             EmployeeSalesReports,
-//             EmployeePayDates,
-//         )
-//     }
-// }
+package org.example.db
+
+// import org.jetbrains.exposed.sql.Table
+// // import org.jetbrains.exposed.dao.id.IntIdTable
+// import org.jetbrains.exposed.sql.Database
+import org.jetbrains.exposed.sql.SchemaUtils
+// import org.jetbrains.exposed.sql.kotlin.datetime.date
+import org.jetbrains.exposed.sql.transactions.transaction
+import org.jetbrains.exposed.sql.*
+import SalaryType
+import PayMethodType
+
+// 給料の受け取り方法 Enum（例）
+
+fun salaryTypeToEnum(salaryType: SalaryType): SalaryTypeEnum =
+    when (salaryType) {
+        is SalaryType.Hourly -> SalaryTypeEnum.Hourly
+        is SalaryType.Monthly -> SalaryTypeEnum.Monthly
+        is SalaryType.Commission -> SalaryTypeEnum.Commission
+    }
+
+enum class SalaryTypeEnum {
+    Hourly,
+    Monthly,
+    Commission,
+}
+
+// 従業員テーブル
+
+object EmployeesTable : Table() {
+    val id: Column<Int> = integer("id").autoIncrement()
+    val name: Column<String> = varchar("name", 255)
+    val address = varchar("address", 255)
+    val salaryType = enumerationByName("salaryType", 20, SalaryTypeEnum::class)
+    val hourlyWage = double("hourlyWage").nullable()
+    val monthlySalary = double("monthlySalary").nullable()
+    val monthlyRate = double("monthlyRate").nullable()
+    val commissionRate = double("commissionRate").nullable()
+    val payMethod = enumerationByName("payMethod", 20, PayMethodType::class)
+    val mail = varchar("mail", 255).nullable()
+    val isHold = bool("hold").default(false)
+
+    override val primaryKey = PrimaryKey(id)
+}
+
+object MembersTable : Table() {
+    val id: Column<Int> = integer("id").autoIncrement()
+    val employeeId: Column<Int> = integer("employeeId")
+    val dues: Column<Double> = double("dues")
+
+    override val primaryKey = PrimaryKey(id)
+}
+
+object BankAccountsTable : Table() {
+    val id: Column<Int> = integer("id").autoIncrement()
+    val employeeId: Column<Int> = integer("employeeId")
+    val bank: Column<String> = varchar("bank", 255)
+    val account: Column<String> = varchar("account", 255)
+
+    override val primaryKey = PrimaryKey(id)
+}
+
+fun init() {
+    Database.connect("jdbc:h2:mem:test;DB_CLOSE_DELAY=-1;", driver = "org.h2.Driver")
+
+    transaction {
+        SchemaUtils.create(
+            EmployeesTable,
+        )
+    }
+}
