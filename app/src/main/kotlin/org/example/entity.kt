@@ -1,18 +1,32 @@
+import PayMethodType
+import kotlinx.datetime.Clock
+import kotlinx.datetime.DatePeriod
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.plus
+import kotlinx.datetime.toLocalDateTime
 import org.example.db.BankAccountsTable
 import org.example.db.EmployeesTable
 import org.example.db.MembersTable
+import org.example.db.PaymentsTable
 import org.example.db.SalaryTypeEnum
+import org.example.db.SalesReceiptsTable
+import org.example.db.ServiceChargesTable
+import org.example.db.TimeRecordsTable
 import org.example.db.salaryTypeToEnum
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
-import java.time.LocalDate
 
 sealed class EntityError(
     message: String,
 ) : Exception(message) {
     class UserError(
+        message: String,
+    ) : EntityError(message)
+
+    class DataError(
         message: String,
     ) : EntityError(message)
 
@@ -76,14 +90,29 @@ sealed class SalaryType {
 }
 
 class SalarySystem {
+    constructor() {
+        try {
+            Database.connect(
+                url = "jdbc:postgresql://localhost:5432/postgres",
+                driver = "org.postgresql.Driver",
+                user = "postgres",
+                password = "postgres",
+            )
+            transaction {
+                addLogger(StdOutSqlLogger)
+                exec("SELECT 1") {}
+            }
+        } catch (e: Exception) {
+            println("Connection failed: ${e.message}")
+        }
+    }
+
     fun addEmployee(
         id: Int,
         name: String,
         address: String,
         salaryType: SalaryType,
     ) {
-        Database.connect("jdbc:h2:mem:test;DB_CLOSE_DELAY=-1;", driver = "org.h2.Driver")
-
         val salaryTypeEnum = salaryTypeToEnum(salaryType)
 
         when (salaryType) {
@@ -135,21 +164,41 @@ class SalarySystem {
     fun addTimeCard(
         employeeId: Int,
         date: LocalDate,
-        hourse: Int,
+        hourse: Double,
     ) {
+        transaction {
+            TimeRecordsTable.insert {
+                it[TimeRecordsTable.employeeId] = employeeId
+                it[TimeRecordsTable.date] = date
+                it[TimeRecordsTable.hours] = hourse
+            }
+        }
     }
 
     fun addSalesReceipt(
         employeeId: Int,
         date: LocalDate,
-        sales: Int,
+        amount: Double,
     ) {
+        transaction {
+            SalesReceiptsTable.insert {
+                it[SalesReceiptsTable.employeeId] = employeeId
+                it[SalesReceiptsTable.date] = date
+                it[SalesReceiptsTable.amount] = amount
+            }
+        }
     }
 
     fun addServiceCharge(
         employeeId: Int,
-        amount: Int,
+        amount: Double,
     ) {
+        transaction {
+            ServiceChargesTable.insert {
+                it[ServiceChargesTable.employeeId] = employeeId
+                it[ServiceChargesTable.amount] = amount
+            }
+        }
     }
 
     private fun getEmployeeSalaryType(employeeId: Int): SalaryTypeEnum {
@@ -277,24 +326,175 @@ class SalarySystem {
     }
 
     fun payday(date: LocalDate) {
-        val employees =
+        // 取得処理
+        var rows =
             transaction {
-                EmployeesTable.selectAll().map { row ->
-                    EmployeeResultRow(
+                val employeeRows = EmployeesTable.selectAll().toList()
+                val memberMap = MembersTable.selectAll().groupBy { it[MembersTable.employeeId] }
+                val timeRecordMap = TimeRecordsTable.selectAll().groupBy { it[TimeRecordsTable.employeeId] }
+                val salesReceiptMap = SalesReceiptsTable.selectAll().groupBy { it[SalesReceiptsTable.employeeId] }
+                val serviceChargeMap = ServiceChargesTable.selectAll().groupBy { it[ServiceChargesTable.employeeId] }
+                val bankAccountMap = BankAccountsTable.selectAll().groupBy { it[BankAccountsTable.employeeId] }
+
+                employeeRows.map { row ->
+                    EmployeeWithAll(
                         id = row[EmployeesTable.id],
                         name = row[EmployeesTable.name],
+                        address = row[EmployeesTable.address],
+                        salaryType = row[EmployeesTable.salaryType],
+                        hourlyWage = row[EmployeesTable.hourlyWage],
+                        monthlySalary = row[EmployeesTable.monthlySalary],
+                        monthlyRate = row[EmployeesTable.monthlyRate],
+                        commissionRate = row[EmployeesTable.commissionRate],
+                        payMethod = row[EmployeesTable.payMethod],
+                        mail = row[EmployeesTable.mail],
+                        isHold = row[EmployeesTable.isHold],
+                        members =
+                            memberMap[row[EmployeesTable.id]]?.map { m ->
+                                Member(m[MembersTable.id], m[MembersTable.dues])
+                            } ?: emptyList(),
+                        timeRecords =
+                            timeRecordMap[row[EmployeesTable.id]]?.map { t ->
+                                TimeRecord(t[TimeRecordsTable.id], t[TimeRecordsTable.date], t[TimeRecordsTable.hours])
+                            } ?: emptyList(),
+                        salesReceipts =
+                            salesReceiptMap[row[EmployeesTable.id]]?.map { s ->
+                                SalesReceipt(s[SalesReceiptsTable.id], s[SalesReceiptsTable.date], s[SalesReceiptsTable.amount])
+                            } ?: emptyList(),
+                        serviceCharges =
+                            serviceChargeMap[row[EmployeesTable.id]]?.map { sc ->
+                                ServiceCharge(sc[ServiceChargesTable.id], sc[ServiceChargesTable.date], sc[ServiceChargesTable.amount])
+                            } ?: emptyList(),
+                        bankAccounts =
+                            bankAccountMap[row[EmployeesTable.id]]?.map { b ->
+                                BankAccount(b[BankAccountsTable.id], b[BankAccountsTable.bank], b[BankAccountsTable.account])
+                            } ?: emptyList(),
                     )
                 }
+                // allに従業員ごとのリストが格納されます
             }
-        for (employee in employees) {
-            println(employee)
+        var lastPayDate =
+            transaction {
+                PaymentsTable
+                    .select(PaymentsTable.date)
+                    .orderBy(PaymentsTable.date, SortOrder.DESC)
+                    .limit(1)
+                    .firstOrNull()
+                    ?.get(PaymentsTable.date)
+            } ?: rows
+                .flatMap { row ->
+                    row.timeRecords.map { it.date } + row.salesReceipts.map { it.date }
+                }.minOrNull()
+                .let {
+                    Clock.System
+                        .now()
+                        .toLocalDateTime(TimeZone.currentSystemDefault())
+                        .date
+                }
+        var now =
+            Clock.System
+                .now()
+                .toLocalDateTime(TimeZone.currentSystemDefault())
+                .date
+
+        var monthlyRate = calcMonthlyWorkRatioKtx(lastPayDate, now)
+
+        for (row in rows) {
+            var amount: Double =
+                when (row.salaryType) {
+                    SalaryTypeEnum.Hourly -> {
+                        var overtimeRete = 1.5
+                        var amount = 0.0
+
+                        var hourlyWage = row.hourlyWage
+                        if (hourlyWage == null) {
+                            throw EntityError.DataError("hourlyWage is null")
+                        }
+
+                        for (record in row.timeRecords) {
+                            amount += record.hours * hourlyWage
+                            if (record.hours > 8) {
+                                var overtimeHours = record.hours - 8
+                                amount += overtimeHours * hourlyWage * overtimeRete
+                            } else {
+                                amount += record.hours * hourlyWage
+                            }
+                        }
+                        amount
+                    }
+                    SalaryTypeEnum.Monthly -> {
+                        var monthlySalary = row.monthlySalary
+                        if (monthlySalary == null) {
+                            throw EntityError.DataError("monthlySalary is null")
+                        }
+                        var amount = monthlyRate * monthlySalary
+                        amount
+                    }
+                    SalaryTypeEnum.Commission -> {
+                        var commissionRate = row.commissionRate
+                        require(commissionRate != null) { "commissionRate is null" }
+                        require(row.monthlySalary != null) { "monthlySalary is null" }
+
+                        var amount = 0.0
+                        for (salaryReceipt in row.salesReceipts) {
+                            amount += salaryReceipt.amount * commissionRate
+                        }
+                        amount += monthlyRate * row.monthlySalary
+
+                        amount
+                    }
+                }
+            println("${row.name} ${row.payMethod} $amount")
         }
     }
 }
 
-data class EmployeeResultRow(
+data class EmployeeWithAll(
     val id: Int,
     val name: String,
+    val address: String,
+    val salaryType: SalaryTypeEnum,
+    val hourlyWage: Double?,
+    val monthlySalary: Double?,
+    val monthlyRate: Double?,
+    val commissionRate: Double?,
+    val payMethod: PayMethodType?,
+    val mail: String?,
+    val isHold: Boolean,
+    val members: List<Member>,
+    val timeRecords: List<TimeRecord>,
+    val salesReceipts: List<SalesReceipt>,
+    val serviceCharges: List<ServiceCharge>,
+    val bankAccounts: List<BankAccount>,
+)
+
+data class Member(
+    val id: Int,
+    val dues: Double,
+)
+
+data class TimeRecord(
+    val id: Int,
+    val date: LocalDate,
+    val hours: Double,
+)
+
+data class SalesReceipt(
+    val id: Int,
+    val date: LocalDate,
+    val amount: Double,
+)
+
+data class ServiceCharge(
+    val id: Int,
+    val date: LocalDate,
+    val amount: Double,
+)
+
+data class BankAccount(
+    val id: Int,
+    val bank: String,
+    val account: String,
 )
 
 sealed class ChangeEmployeeField {
@@ -354,4 +554,32 @@ sealed class Salary {
     class CommissionRate(
         val commissionRate: Int,
     ) : Salary()
+}
+
+fun calcMonthlyWorkRatioKtx(
+    start: LocalDate,
+    end: LocalDate,
+): Double {
+    require(!(end < start)) { "endはstart以降の日付である必要があります" }
+
+    var totalRatio = 0.0
+    var current = LocalDate(start.year, start.month, 1)
+
+    while (current <= end) {
+        // うるう年判定
+        val isLeap = current.year % 4 == 0 && (current.year % 100 != 0 || current.year % 400 == 0)
+        // 月の日数（うるう年を考慮）
+        val monthLength = current.month.length(isLeap)
+        // 最初の月の1日目 or それ以外→1日
+        val firstDay = if (current.year == start.year && current.month == start.month) start.dayOfMonth else 1
+        // 最後の月のend日 or それ以外→月末
+        val lastDay = if (current.year == end.year && current.month == end.month) end.dayOfMonth else monthLength
+
+        val workedDays = lastDay - firstDay + 1
+        val ratio = workedDays.toDouble() / monthLength
+
+        totalRatio += ratio
+        current = current.plus(DatePeriod(months = 1))
+    }
+    return totalRatio
 }
